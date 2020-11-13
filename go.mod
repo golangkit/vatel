@@ -6,7 +6,7 @@ go 1.13
 
 require (
 	github.com/axkit/bitset v0.0.4
-	github.com/axkit/errors v0.0.0-20201112205136-541acf25f9d0
+	github.com/axkit/errors v0.0.0
 	github.com/fasthttp/router v1.3.2
 	github.com/lib/pq v1.8.0 // indirect
 	github.com/rs/zerolog v1.20.0
