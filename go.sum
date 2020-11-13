@@ -1,16 +1,5 @@
 github.com/andybalholm/brotli v1.0.0 h1:7UCwP93aiSfvWpapti8g88vVVGp2qqtGyePsSuDafo4=
 github.com/andybalholm/brotli v1.0.0/go.mod h1:loMXtMfwqflxFJPmdbJO0a3KNoPuLBgiu3qAvBg8x/Y=
-github.com/axkit/bitset v0.0.0-20201104140504-f5051d3d8f82 h1:BF1fYU9tg8q7uU3XxXGLxU84qXN9eb1+iTtzulnfUM4=
-github.com/axkit/bitset v0.0.0-20201104140504-f5051d3d8f82/go.mod h1:LrSwSq7RPmp3DtRYgZ4YpvXA8l363H63iBxMOdHMPbQ=
-github.com/axkit/bitset v0.0.1 h1:SQ6/j3Jf+585veCTE+Qz9uvSRfpWjjxRxkMLmHzXtpw=
-github.com/axkit/bitset v0.0.1/go.mod h1:LrSwSq7RPmp3DtRYgZ4YpvXA8l363H63iBxMOdHMPbQ=
-github.com/axkit/bitset v0.0.2 h1:TqICvJpwr4NwbxNaqJq6kFcg1AbsZuw590ydkMR9rbQ=
-github.com/axkit/bitset v0.0.2/go.mod h1:LrSwSq7RPmp3DtRYgZ4YpvXA8l363H63iBxMOdHMPbQ=
-github.com/axkit/bitset v0.0.3/go.mod h1:LrSwSq7RPmp3DtRYgZ4YpvXA8l363H63iBxMOdHMPbQ=
-github.com/axkit/bitset v0.0.4 h1:jdtXYCtQw0e6z8GSU9gXWHs4aZZTfBk3hKO+6xlg9LM=
-github.com/axkit/bitset v0.0.4/go.mod h1:LrSwSq7RPmp3DtRYgZ4YpvXA8l363H63iBxMOdHMPbQ=
-github.com/axkit/errors v0.0.0-20201103205758-2ab7f75c1671 h1:cdzjOrOmWDX269XYbgQDJrPFa84O9AWmcmIWlpaMK5w=
-github.com/axkit/errors v0.0.0-20201103205758-2ab7f75c1671/go.mod h1:vBWLz3sLyxUXcxD+TrV2ElxnwB+INqvyU69uI9U/9bc=
 github.com/axkit/errors v0.0.0-20201112205136-541acf25f9d0 h1:V4RC9CvYJ/iTULb3nqF4y+4U1crKtkNUSSZgIFe+h7g=
 github.com/axkit/errors v0.0.0-20201112205136-541acf25f9d0/go.mod h1:3lpe31BA3dIuOjGWC7TXXy6voVxNQapCG1RgEFHVC+I=
 github.com/coreos/go-systemd v0.0.0-20190321100706-95778dfbb74e/go.mod h1:F5haX7vjVVG0kc13fIWeqUViNPyEJxv/OmvnBo0Yme4=
@@ -18,8 +7,6 @@ github.com/fasthttp/router v1.3.2 h1:n9r5QNuJi5z5Sp2vp/0SrawogTjGfYFqTOyP/R8ehNI
 github.com/fasthttp/router v1.3.2/go.mod h1:athTSKMdel0Qhh3W4nB8qn+EPYuyj6YZMUo6ZcXWTgc=
 github.com/klauspost/compress v1.10.7 h1:7rix8v8GpI3ZBb0nSozFRgbtXKv+hOe+qfEpZqybrAg=
 github.com/klauspost/compress v1.10.7/go.mod h1:aoV0uJVorq1K+umq18yTdKaF57EivdYsUV+/s2qKfXs=
-github.com/lib/pq v1.8.0 h1:9xohqzkUwzR4Ga4ivdTcawVS89YSDVxXMa3xJX3cGzg=
-github.com/lib/pq v1.8.0/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/rs/xid v1.2.1/go.mod h1:+uKXf+4Djp6Md1KODXJxgGQPKngRmWyn10oCKFzNHOQ=
 github.com/rs/zerolog v1.20.0 h1:38k9hgtUBdxFwE34yS8rTHmHBa4eN16E4DJlv177LNs=
