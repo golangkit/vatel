@@ -70,6 +70,8 @@ type Vatel struct {
 	td      TokenDecoder
 	pm      PermissionManager
 	rd      RequestDebugger
+
+	authDisabled bool
 }
 
 // NewVatel returns new instance of Vatel.
@@ -80,8 +82,13 @@ func NewVatel(urlprefix string) *Vatel {
 }
 
 // SetAuthorizer assigns authorization implementation.
+// If Authorizer is not assigned, all Endpoint's Perms will be ignored.
 func (v *Vatel) SetAuthorizer(a Authorizer) {
 	v.auth = a
+}
+
+func (v *Vatel) DisableAuthorizer() {
+	v.authDisabled = true
 }
 
 // SetPermissionManager assigns permission manager implementation.
@@ -89,6 +96,7 @@ func (v *Vatel) SetPermissionManager(pm PermissionManager) {
 	v.pm = pm
 }
 
+// SetRequestDebugger assigns request debugger implementation.
 func (v *Vatel) SetRequestDebugger(rd RequestDebugger) {
 	v.rd = rd
 }

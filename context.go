@@ -15,10 +15,12 @@ type Context interface {
 	LogValues() map[string]interface{}
 	SetStatusCode(code int) *VatelContext
 	FormFile(key string) (*multipart.FileHeader, error)
+	FormValue(key string) []byte
 	SaveMultipartFile(fh *multipart.FileHeader, path string) error
 	Header(name string) []byte
 	TokenPayload() TokenPayloader
 	SetTokenPayload(tp TokenPayloader)
+	SetHeader(name, val []byte) *VatelContext
 }
 
 type VatelContext struct {
@@ -47,6 +49,10 @@ func (ctx *VatelContext) TokenPayload() TokenPayloader {
 func (ctx *VatelContext) FormFile(key string) (*multipart.FileHeader, error) {
 	return ctx.fh.FormFile(key)
 }
+
+func (ctx *VatelContext) FormValue(key string) []byte {
+	return ctx.fh.FormValue(key)
+}
 func (ctx *VatelContext) Header(name string) []byte {
 	return ctx.fh.Request.Header.Peek(name)
 }
@@ -57,6 +63,11 @@ func (ctx *VatelContext) SaveMultipartFile(fh *multipart.FileHeader, path string
 
 func (ctx *VatelContext) SetContentType(contentType []byte) *VatelContext {
 	ctx.fh.SetContentTypeBytes(contentType)
+	return ctx
+}
+
+func (ctx *VatelContext) SetHeader(name, val []byte) *VatelContext {
+	ctx.fh.Response.Header.SetBytesKV(name, val)
 	return ctx
 }
 

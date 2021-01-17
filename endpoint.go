@@ -166,18 +166,26 @@ func (ce *Error) MarshalZerologObject(e *zerolog.Event) {
 }
 
 func writeErrorResponse(ctx Context, log *zerolog.Logger, err error) {
+	if err == nil {
+		return
+	}
 
 	ee, ok := err.(*errors.CatchedError)
 	if ok {
 		log.Error().EmbedObject(&Error{*ee}).Msg(ee.Last().Message)
-	} else {
-		log.Error().Msg(err.Error())
+		ctx.SetStatusCode(ee.Last().StatusCode)
+
+		enc := json.NewEncoder(ctx.BodyWriter())
+		if err := enc.Encode((&Error{*ee}).JSON()); err != nil {
+			fmt.Println(err.Error())
+		}
+		return
 	}
 
-	ctx.SetStatusCode(ee.Last().StatusCode)
+	log.Error().Msg(err.Error())
 
 	enc := json.NewEncoder(ctx.BodyWriter())
-	if err := enc.Encode((&Error{*ee}).JSON()); err != nil {
+	if err := enc.Encode((&Error{*errors.Catch(err)}).JSON()); err != nil {
 		fmt.Println(err.Error())
 	}
 }
@@ -195,7 +203,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			Msg("new request")
 
 		ctx := NewContext(fctx)
-		if len(e.Perms) > 0 {
+		if len(e.Perms) > 0 && e.auth != nil {
 			token, err := e.authorize(fctx)
 			if err != nil {
 				writeErrorResponse(ctx, &logger, err)
@@ -552,6 +560,13 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 			continue
 		}
 
+		if sf.Kind() == reflect.Ptr {
+			if sf.IsNil() {
+				sf.Set(reflect.New(sf.Type().Elem()))
+			}
+			sf = sf.Elem()
+		}
+
 		switch sf.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			k, err := strconv.ParseInt(string(val), 10, 64)
@@ -559,16 +574,36 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 				return err
 			}
 			sf.SetInt(k)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			k, err := strconv.ParseUint(string(val), 10, 64)
+			if err != nil {
+				return err
+			}
+			sf.SetUint(k)
 		case reflect.String:
 			sf.SetString(string(val))
-		case reflect.Float64, reflect.Float32:
-
+		case reflect.Float64:
+			k, err := strconv.ParseFloat(string(val), 64)
+			if err != nil {
+				return err
+			}
+			sf.SetFloat(k)
+		case reflect.Float32:
+			k, err := strconv.ParseFloat(string(val), 32)
+			if err != nil {
+				return err
+			}
+			sf.SetFloat(k)
 		case reflect.Bool:
-			// TODO
+			b, err := strconv.ParseBool(string(val))
+			if err != nil {
+				return err
+			}
+			sf.SetBool(b)
 		// case reflect. TODO date.Date YYYY-ММ-DD
 
 		default:
-			println("unsopported type:", string(val))
+			println("unsupported type:", string(val), sf.Kind())
 		}
 	}
 	return nil
@@ -589,7 +624,7 @@ func (e *Endpoint) compile(v *Vatel) error {
 	}
 
 	if len(e.Perms) > 0 {
-		if e.auth == nil {
+		if e.auth == nil && !v.authDisabled {
 			return fmt.Errorf("endpoint %s %s requires calling SetAuthorizer() before", e.Method, opath)
 		}
 		if e.td == nil {
