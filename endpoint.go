@@ -627,11 +627,11 @@ func (e *Endpoint) compile(v *Vatel) error {
 		if e.auth == nil && !v.authDisabled {
 			return fmt.Errorf("endpoint %s %s requires calling SetAuthorizer() before", e.Method, opath)
 		}
-		if e.td == nil {
+		if e.td == nil && !v.authDisabled {
 			return fmt.Errorf("endpoint %s %s requires calling SetTokenDecode() before", e.Method, opath)
 		}
 
-		if e.pm == nil {
+		if e.pm == nil && !v.authDisabled {
 			return fmt.Errorf("endpoint %s %s requires calling SetPermissionManager() before", e.Method, opath)
 		}
 

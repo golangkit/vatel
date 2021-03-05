@@ -77,7 +77,7 @@ type Vatel struct {
 // NewVatel returns new instance of Vatel.
 func NewVatel(urlprefix string) *Vatel {
 	v := Vatel{params: map[string]string{}, uprefix: urlprefix}
-	v.ep = []Endpoint{{Method: "GET", Path: "/", Perms: []string{"MountingDelete"}, Controller: func() Handler { return &tocController{s: &v} }}}
+	v.ep = []Endpoint{{Method: "GET", Path: "/", Controller: func() Handler { return &tocController{s: &v} }}}
 	return &v
 }
 
@@ -110,8 +110,10 @@ func (v *Vatel) SetTokenDecoder(tp TokenDecoder) {
 //
 // The method does not check Endpoint for correctes and uqiqueness here.
 // Paths validation implemented by method BuildHandlers.
-func (v *Vatel) Add(cs Endpointer) {
-	v.ep = append(v.ep, cs.Endpoints()...)
+func (v *Vatel) Add(e ...Endpointer) {
+	for i := range e {
+		v.ep = append(v.ep, e[i].Endpoints()...)
+	}
 }
 
 // Set assigns related
