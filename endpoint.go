@@ -7,12 +7,13 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/axkit/errors"
 	"github.com/rs/zerolog"
-	goon "github.com/shurcooL/go-goon"
+
+	//	goon "github.com/shurcooL/go-goon"
+	"github.com/hexops/valast"
 	"github.com/valyala/fasthttp"
 )
 
@@ -116,78 +117,86 @@ type Paramer interface {
 }
 
 // Error overloading for zerolog.Implementation
-type Error struct {
-	errors.CatchedError
-}
+// type Error struct {
+// 	errors.CatchedError
+// }
 
-func (ce *Error) JSON() interface{} {
+// func (ce *Error) JSON() interface{} {
 
-	return &struct {
-		Message string   `json:"message"`
-		Code    string   `json:"code,omitempty"`
-		Prev    []string `json:"prev,omitempty"`
-	}{Message: ce.Last().Message,
-		Code: ce.Last().Code,
-		Prev: ce.Strs(true),
-	}
-}
+// 	return &struct {
+// 		Message string   `json:"message"`
+// 		Code    string   `json:"code,omitempty"`
+// 		Prev    []string `json:"prev,omitempty"`
+// 	}{Message: ce.Last().Message,
+// 		Code: ce.Last().Code,
+// 		Prev: ce.AllMessages(true),
+// 	}
+// }
 
-func (ce *Error) MarshalZerologObject(e *zerolog.Event) {
-	if ce == nil {
-		return
-	}
+// func (ce *Error) MarshalZerologObject(e *zerolog.Event) {
+// 	if ce == nil {
+// 		return
+// 	}
 
-	e.Str("severity", ce.Last().Severity.String())
-	if ce.Last().Code != "" {
-		e.Str("errcode", ce.Last().Code)
-	}
+// 	e.Str("severity", ce.Last().Severity.String())
+// 	if ce.Last().Code != "" {
+// 		e.Str("errcode", ce.Last().Code)
+// 	}
 
-	if len(ce.Fields) > 0 {
-		e.Fields(ce.Fields)
-	}
+// 	if len(ce.Fields) > 0 {
+// 		e.Fields(ce.Fields)
+// 	}
 
-	if ce.Last().StatusCode != 0 {
-		e.Int("statusCode", ce.Last().StatusCode)
-	}
+// 	if ce.Last().StatusCode != 0 {
+// 		e.Int("statusCode", ce.Last().StatusCode)
+// 	}
 
-	if ce.Len() > 1 {
-		e.Strs("errs", ce.Strs(false))
-	}
+// 	if ce.Len() > 1 {
+// 		e.Strs("errs", ce.Strs(false))
+// 	}
 
-	s := ""
-	for i := range ce.Frames {
-		if strings.Contains(ce.Frames[i].Function, "fasthttp") {
-			break
-		}
-		s += ce.Frames[i].Function + "() in " + fmt.Sprintf("%s:%d; ", ce.Frames[i].File, ce.Frames[i].Line)
-	}
-	e.Str("stack", s)
+// 	s := ""
+// 	for i := range ce.Frames {
+// 		if strings.Contains(ce.Frames[i].Function, "fasthttp") {
+// 			break
+// 		}
+// 		s += ce.Frames[i].Function + "() in " + fmt.Sprintf("%s:%d; ", ce.Frames[i].File, ce.Frames[i].Line)
+// 	}
+// 	e.Str("stack", s)
 
-}
+// }
 
-func writeErrorResponse(ctx Context, log *zerolog.Logger, err error) {
+func writeErrorResponse(ctx Context, rlog *zerolog.Logger, err error) {
 	if err == nil {
 		return
 	}
 
-	ee, ok := err.(*errors.CatchedError)
-	if ok {
-		log.Error().EmbedObject(&Error{*ee}).Msg(ee.Last().Message)
-		ctx.SetStatusCode(ee.Last().StatusCode)
+	rlog.Error().Bytes("err", errors.ToServerJSON(err)).Msg("request failed")
+	_, xerr := ctx.BodyWriter().Write(errors.ToClientJSON(err))
 
-		enc := json.NewEncoder(ctx.BodyWriter())
-		if err := enc.Encode((&Error{*ee}).JSON()); err != nil {
-			fmt.Println(err.Error())
-		}
-		return
+	if xerr != nil {
+		rlog.Error().Bytes("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
 	}
 
-	log.Error().Msg(err.Error())
+	// ee, ok := err.(*errors.CatchedError)
+	// if !ok {
+	// 	rlog.Error().Msg(err.Error())
 
-	enc := json.NewEncoder(ctx.BodyWriter())
-	if err := enc.Encode((&Error{*errors.Catch(err)}).JSON()); err != nil {
-		fmt.Println(err.Error())
-	}
+	// 	enc := json.NewEncoder(ctx.BodyWriter())
+	// 	if err := enc.Encode((&Error{*errors.Catch(err)}).JSON()); err != nil {
+	// 		fmt.Println(err.Error())
+	// 	}
+	// }
+
+	// rlog.Error().EmbedObject(&Error{*ee}).Msg(ee.Last().Message)
+	// ctx.SetStatusCode(ee.Last().StatusCode)
+
+	// enc := json.NewEncoder(ctx.BodyWriter())
+	// if err := enc.Encode((&Error{*ee}).JSON()); err != nil {
+	// 	fmt.Println(err.Error())
+	// }
+	return
+
 }
 
 func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
@@ -271,7 +280,7 @@ func (e *Endpoint) authorize(ctx *fasthttp.RequestCtx) (Tokener, error) {
 
 	token, err := e.td.Decode(ctx.Request.Header.Peek("Authorization"))
 	if err != nil {
-		return nil, errors.Catch(err).Msg("unauthorized").SetStrs("perms", e.Perms...)
+		return nil, errors.Catch(err).SetStrs("perms", e.Perms...).Msg("unauthorized")
 	}
 
 	isAllowed, err := e.auth.IsAllowed(token.ApplicationPayload().Perms(), e.perms...)
@@ -436,7 +445,7 @@ func (e *Endpoint) handleDescription(ctx Context) error {
 
 	_, err := ctx.BodyWriter().Write(e.genDescription(c))
 	if err != nil {
-		return errors.Catch(err).Msg("description response write failed").StatusCode(500)
+		return errors.Catch(err).StatusCode(500).Msg("description response write failed")
 	}
 	return nil
 }
@@ -448,19 +457,20 @@ func (e *Endpoint) genDescription(c Handler) []byte {
 	}
 
 	if e.isPathParametrized {
-		s += "\n" + goon.Sdump(c.(Paramer).Param())
+		//s += "\n" + goon.SDump(c.(Paramer).Param())
+		s += "\n" + valast.String(c.(Paramer).Param()) + "\n"
 	}
 
 	if e.isRequestBodyExpected {
-		s += "Body input: \n" + goon.Sdump(c.(Inputer).Input())
+		s += "Body input: \n" + valast.String(c.(Inputer).Input())
 	}
 
 	if e.isURLQueryExpected {
-		s += "URL input\n" + goon.Sdump(c.(Inputer).Input())
+		s += "URL input\n" + valast.String(c.(Inputer).Input())
 	}
 
 	if e.isResulter {
-		s += "\n" + goon.Sdump(c.(Resulter).Result())
+		s += "\n" + valast.String(c.(Resulter).Result())
 	}
 
 	return []byte(s)
