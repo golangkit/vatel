@@ -171,11 +171,13 @@ func writeErrorResponse(ctx Context, rlog *zerolog.Logger, err error) {
 		return
 	}
 
-	rlog.Error().Bytes("err", errors.ToServerJSON(err)).Msg("request failed")
+	//fmt.Printf("ha-%#v\n", err.(*errors.CatchedError))
+
+	rlog.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
 	_, xerr := ctx.BodyWriter().Write(errors.ToClientJSON(err))
 
 	if xerr != nil {
-		rlog.Error().Bytes("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
+		rlog.Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
 	}
 
 	// ee, ok := err.(*errors.CatchedError)
