@@ -91,7 +91,7 @@ type Inputer interface {
 	Input() interface{}
 }
 
-// Resulter is the interface what wraps Result method.
+// Resulter is the interface what wraps a single Result method.
 //
 // Result returns reference to the object what will be
 // send to the client when endpoint handler completes succesfully.
@@ -112,93 +112,32 @@ type Resulter interface {
 //		CustomerID int `param:"id"
 //	 	BillNum string `param:"billnum"`
 // }
+//
+// If there is URL params and variables like /customer/{id}?sortBy=name&balanceAbove=100
+// methods Param and Input can return reference to the same struct.
 type Paramer interface {
 	Param() interface{}
 }
-
-// Error overloading for zerolog.Implementation
-// type Error struct {
-// 	errors.CatchedError
-// }
-
-// func (ce *Error) JSON() interface{} {
-
-// 	return &struct {
-// 		Message string   `json:"message"`
-// 		Code    string   `json:"code,omitempty"`
-// 		Prev    []string `json:"prev,omitempty"`
-// 	}{Message: ce.Last().Message,
-// 		Code: ce.Last().Code,
-// 		Prev: ce.AllMessages(true),
-// 	}
-// }
-
-// func (ce *Error) MarshalZerologObject(e *zerolog.Event) {
-// 	if ce == nil {
-// 		return
-// 	}
-
-// 	e.Str("severity", ce.Last().Severity.String())
-// 	if ce.Last().Code != "" {
-// 		e.Str("errcode", ce.Last().Code)
-// 	}
-
-// 	if len(ce.Fields) > 0 {
-// 		e.Fields(ce.Fields)
-// 	}
-
-// 	if ce.Last().StatusCode != 0 {
-// 		e.Int("statusCode", ce.Last().StatusCode)
-// 	}
-
-// 	if ce.Len() > 1 {
-// 		e.Strs("errs", ce.Strs(false))
-// 	}
-
-// 	s := ""
-// 	for i := range ce.Frames {
-// 		if strings.Contains(ce.Frames[i].Function, "fasthttp") {
-// 			break
-// 		}
-// 		s += ce.Frames[i].Function + "() in " + fmt.Sprintf("%s:%d; ", ce.Frames[i].File, ce.Frames[i].Line)
-// 	}
-// 	e.Str("stack", s)
-
-// }
 
 func writeErrorResponse(ctx Context, rlog *zerolog.Logger, err error) {
 	if err == nil {
 		return
 	}
 
-	//fmt.Printf("ha-%#v\n", err.(*errors.CatchedError))
+	statusCode := 500
+	if ce, ok := err.(*errors.CatchedError); ok {
+		statusCode = ce.Last().StatusCode
+	}
 
 	rlog.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
+	ctx.SetStatusCode(statusCode)
 	_, xerr := ctx.BodyWriter().Write(errors.ToClientJSON(err))
 
 	if xerr != nil {
 		rlog.Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
 	}
 
-	// ee, ok := err.(*errors.CatchedError)
-	// if !ok {
-	// 	rlog.Error().Msg(err.Error())
-
-	// 	enc := json.NewEncoder(ctx.BodyWriter())
-	// 	if err := enc.Encode((&Error{*errors.Catch(err)}).JSON()); err != nil {
-	// 		fmt.Println(err.Error())
-	// 	}
-	// }
-
-	// rlog.Error().EmbedObject(&Error{*ee}).Msg(ee.Last().Message)
-	// ctx.SetStatusCode(ee.Last().StatusCode)
-
-	// enc := json.NewEncoder(ctx.BodyWriter())
-	// if err := enc.Encode((&Error{*ee}).JSON()); err != nil {
-	// 	fmt.Println(err.Error())
-	// }
 	return
-
 }
 
 func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
