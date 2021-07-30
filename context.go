@@ -21,6 +21,7 @@ type Context interface {
 	TokenPayload() TokenPayloader
 	SetTokenPayload(tp TokenPayloader)
 	SetHeader(name, val []byte) *VatelContext
+	RequestCtx() *fasthttp.RequestCtx
 }
 
 type VatelContext struct {
@@ -83,11 +84,18 @@ func (ctx *VatelContext) LogValues() map[string]interface{} {
 	return ctx.kv
 }
 
+//
 func (ctx *VatelContext) BodyWriter() io.Writer {
 	return ctx.fh.Response.BodyWriter()
 }
 
+// SetStatusCode sets HTTP status code.
 func (ctx *VatelContext) SetStatusCode(code int) *VatelContext {
 	ctx.fh.SetStatusCode(code)
 	return ctx
+}
+
+// RequestCtx returns fasthttp's context.
+func (ctx *VatelContext) RequestCtx() *fasthttp.RequestCtx {
+	return ctx.fh
 }

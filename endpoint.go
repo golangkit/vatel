@@ -149,7 +149,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		logger := l.With().Uint64("reqid", fctx.ID()).Logger()
 		logger.Info().
 			Bool("private", len(e.Perms) > 0).
-			IPAddr("from", fctx.RemoteIP()).
+			Str("from", fctx.RemoteAddr().String()).
 			Msg("new request")
 
 		ctx := NewContext(fctx)
