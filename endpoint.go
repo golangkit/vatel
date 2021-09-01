@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	//	goon "github.com/shurcooL/go-goon"
-	"github.com/hexops/valast"
+	//	"github.com/hexops/valast"
 	"github.com/valyala/fasthttp"
 )
 
@@ -399,19 +399,19 @@ func (e *Endpoint) genDescription(c Handler) []byte {
 
 	if e.isPathParametrized {
 		//s += "\n" + goon.SDump(c.(Paramer).Param())
-		s += "\n" + valast.String(c.(Paramer).Param()) + "\n"
+		//s += "\n" + valast.String(c.(Paramer).Param()) + "\n"
 	}
 
 	if e.isRequestBodyExpected {
-		s += "Body input: \n" + valast.String(c.(Inputer).Input())
+		//s += "Body input: \n" + valast.String(c.(Inputer).Input())
 	}
 
 	if e.isURLQueryExpected {
-		s += "URL input\n" + valast.String(c.(Inputer).Input())
+		//s += "URL input\n" + valast.String(c.(Inputer).Input())
 	}
 
 	if e.isResulter {
-		s += "\n" + valast.String(c.(Resulter).Result())
+		//s += "\n" + valast.String(c.(Resulter).Result())
 	}
 
 	return []byte(s)
