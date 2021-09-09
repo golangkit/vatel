@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/axkit/date"
 	"github.com/axkit/errors"
 	"github.com/rs/zerolog"
 
@@ -494,14 +495,20 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 
 	for i := 0; i < tof.NumField(); i++ {
 		sf := s.Field(i)
+		atof := tof.Field(i)
 
 		if sf.CanSet() == false {
 			continue
 		}
 
-		tof := tof.Field(i)
+		if sf.Kind() == reflect.Struct {
+			if err := decodeURLQuery(ctx, sf.Addr().Interface()); err != nil {
+				return err
+			}
+			continue
+		}
 
-		tag := tof.Tag.Get("param")
+		tag := atof.Tag.Get("param")
 		if tag == "" {
 			continue
 		}
@@ -516,6 +523,17 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 				sf.Set(reflect.New(sf.Type().Elem()))
 			}
 			sf = sf.Elem()
+		}
+
+		if atof.Type.Name() == "Date" {
+			if _, ok := sf.Interface().(date.Date); ok {
+				d, err := date.Parse(string(val))
+				if err != nil {
+					return err
+				}
+				sf.SetUint(uint64(d))
+			}
+			continue
 		}
 
 		switch sf.Kind() {
@@ -551,10 +569,9 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 				return err
 			}
 			sf.SetBool(b)
-		// case reflect. TODO date.Date YYYY-ММ-DD
-
 		default:
-			println("unsupported type:", string(val), sf.Kind())
+
+			return errors.ValidationFailed("unsupported type").Set("val", string(val)).Set("kind", sf.Kind().String())
 		}
 	}
 	return nil

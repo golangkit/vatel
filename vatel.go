@@ -167,3 +167,8 @@ func (v *Vatel) buildHandlers(mux *router.Router, l *zerolog.Logger) error {
 	}
 	return nil
 }
+
+type Dater interface {
+	Parse(string) (interface{}, error)
+	Set(interface{})
+}
