@@ -44,6 +44,8 @@ type Endpoint struct {
 	// will not be written to the log. (i.e authentication  endpoint)
 	NoResultLog bool
 
+	ManualStatusCode bool
+
 	//RequestContentType  string // если пусто, то присваивается "application/json; encoding=utf-8"
 
 	isPathParametrized    bool
@@ -56,11 +58,14 @@ type Endpoint struct {
 	td            TokenDecoder
 	pm            PermissionManager
 	rd            RequestDebugger
+	rtc           RevokeTokenChecker
 	perms         []uint
+
+	middlewares []func(Context) error
 }
 
-// NewEnpoint builds Endpoint.
-func NewEnpoint(method, path string, perms []string, c func() Handler) *Endpoint {
+// NewEndpoint builds Endpoint.
+func NewEndpoint(method, path string, perms []string, c func() Handler) *Endpoint {
 	return &Endpoint{Method: method, Path: path, Perms: append([]string{}, perms...), Controller: c}
 }
 
@@ -180,6 +185,13 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			return
 		}
 
+		for i := range e.middlewares {
+			if err := e.middlewares[i](ctx); err != nil {
+				writeErrorResponse(ctx, &logger, err)
+				return
+			}
+		}
+
 		if err = c.Handle(ctx); err != nil {
 			writeErrorResponse(ctx, &logger, err)
 			return
@@ -204,6 +216,9 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 				return
 			}
 		} else {
+			if !e.ManualStatusCode {
+				//fctx.Response().StatusCode(204)
+			}
 			// если тела ответа в виде JSON объекта не предполагается, то ожидается
 			// что сам обработчик obj.Haldler() установит соответствующие статусы
 			// и запишет в тело ответа соответствующие заголовки.
@@ -218,9 +233,30 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 	}
 }
 
+var (
+	ErrAuthorizationHeaderMissed = errors.New("header Authorization missed").Code("VTL-0001").StatusCode(401).Critical()
+	ErrAccessTokenRevoked        = errors.New("access token revoked").Code("VTL-0002").StatusCode(401).Critical()
+)
+
 func (e *Endpoint) authorize(ctx *fasthttp.RequestCtx) (Tokener, error) {
 
-	token, err := e.td.Decode(ctx.Request.Header.Peek("Authorization"))
+	at := ctx.Request.Header.Peek("Authorization")
+	if len(at) == 0 {
+		return nil, ErrAuthorizationHeaderMissed
+	}
+
+	if e.rtc != nil {
+		isRevoked, err := e.rtc.IsTokenRevoked(string(at))
+		if err != nil {
+			return nil, err
+		}
+
+		if isRevoked {
+			return nil, ErrAccessTokenRevoked
+		}
+	}
+
+	token, err := e.td.Decode(at)
 	if err != nil {
 		return nil, errors.Catch(err).SetStrs("perms", e.Perms...).Msg("unauthorized")
 	}
@@ -584,6 +620,8 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.td = v.td
 	e.pm = v.pm
 	e.rd = v.rd
+	e.rtc = v.rtc
+	e.middlewares = v.mdw
 
 	if e.ResponseContentType != "" {
 		e.responseContentType = []byte(e.ResponseContentType)

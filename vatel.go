@@ -50,6 +50,13 @@ type PermissionManager interface {
 	PermissionBitPos(perm string) (uint, bool)
 }
 
+// RevokeTokenChecker is the interface what wraps a single method IsTokenRevoked.
+//
+// IsTokenRevoked returns true if access token was revoked.
+type RevokeTokenChecker interface {
+	IsTokenRevoked(accessToken string) (bool, error)
+}
+
 // TokenDecoder is the interface what wraps a single method Decode.
 //
 // TokenDecoder decodes token and returns object Tokener.
@@ -70,6 +77,10 @@ type Vatel struct {
 	td      TokenDecoder
 	pm      PermissionManager
 	rd      RequestDebugger
+	rtc     RevokeTokenChecker
+
+	mdw []func(Context) error
+	nfh func(Context) error
 
 	authDisabled bool
 }
@@ -85,6 +96,10 @@ func NewVatel(urlprefix string) *Vatel {
 // If Authorizer is not assigned, all Endpoint's Perms will be ignored.
 func (v *Vatel) SetAuthorizer(a Authorizer) {
 	v.auth = a
+}
+
+func (v *Vatel) SetRevokeTokenCheker(rtc RevokeTokenChecker) {
+	v.rtc = rtc
 }
 
 func (v *Vatel) DisableAuthorizer() {
@@ -171,4 +186,12 @@ func (v *Vatel) buildHandlers(mux *router.Router, l *zerolog.Logger) error {
 type Dater interface {
 	Parse(string) (interface{}, error)
 	Set(interface{})
+}
+
+func (v *Vatel) AddMiddleware(f ...func(Context) error) {
+	v.mdw = append(v.mdw, f...)
+}
+
+func (v *Vatel) NotFoundHandler(f func(Context) error) {
+	v.nfh = f
 }
