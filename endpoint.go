@@ -20,6 +20,10 @@ import (
 
 // Endpoint describes a REST endpoint attributes and related request Handler.
 type Endpoint struct {
+
+	// SuppressLog holds rule to suppress all log output for the handler.
+	SuppressLog bool
+
 	// Method holds HTTP method name (e.g GET, POST, PUT, DELETE).
 	Method string
 
@@ -153,10 +157,12 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		inDebug, outDebug := !e.NoInputLog, !e.NoResultLog
 
 		logger := l.With().Uint64("reqid", fctx.ID()).Logger()
-		logger.Info().
-			Bool("private", len(e.Perms) > 0).
-			Str("from", fctx.RemoteAddr().String()).
-			Msg("new request")
+		if !e.SuppressLog {
+			logger.Info().
+				Bool("private", len(e.Perms) > 0).
+				Str("from", fctx.RemoteAddr().String()).
+				Msg("new request")
+		}
 
 		ctx := NewContext(fctx)
 		if len(e.Perms) > 0 && e.auth != nil {
@@ -206,7 +212,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		resp, ok := c.(Resulter)
 		if ok {
 			r := resp.Result()
-			if outDebug {
+			if outDebug && !e.SuppressLog {
 				elog.Interface("result", r)
 			}
 
@@ -225,11 +231,13 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			// например обработчик отдачи файлов.
 		}
 
-		if kv := ctx.LogValues(); len(kv) > 0 {
+		if kv := ctx.LogValues(); len(kv) > 0 && !e.SuppressLog {
 			elog.Interface("hval", kv)
 		}
 
-		elog.Str("dur", time.Since(fctx.Time()).String()).Msg("completed")
+		if !e.SuppressLog {
+			elog.Str("dur", time.Since(fctx.Time()).String()).Msg("completed")
+		}
 	}
 }
 
