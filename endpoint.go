@@ -138,6 +138,7 @@ func writeErrorResponse(ctx Context, rlog *zerolog.Logger, err error) {
 	if ce, ok := err.(*errors.CatchedError); ok {
 		statusCode = ce.Last().StatusCode
 	}
+	ctx.SetContentType([]byte("application/json; charset=utf-8"))
 
 	rlog.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
 	ctx.SetStatusCode(statusCode)
