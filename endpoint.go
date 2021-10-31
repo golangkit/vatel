@@ -129,23 +129,35 @@ type Paramer interface {
 	Param() interface{}
 }
 
-func writeErrorResponse(ctx Context, rlog *zerolog.Logger, err error) {
+func writeErrorResponse(ctx Context, zl *zerolog.Logger, err error) {
 	if err == nil {
 		return
+	}
+
+	isDebugMode := false
+
+	if t := ctx.TokenPayload(); t != nil {
+		isDebugMode = t.Debug()
 	}
 
 	statusCode := 500
 	if ce, ok := err.(*errors.CatchedError); ok {
 		statusCode = ce.Last().StatusCode
 	}
-	ctx.SetContentType([]byte("application/json; charset=utf-8"))
+	zl.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
 
-	rlog.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
+	ctx.SetContentType([]byte("application/json; charset=utf-8"))
 	ctx.SetStatusCode(statusCode)
-	_, xerr := ctx.BodyWriter().Write(errors.ToClientJSON(err))
+
+	var ff errors.FormattingFlag
+	if isDebugMode {
+		ff = errors.AddStack & errors.AddFields & errors.AddWrappedErrors
+	}
+
+	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
 
 	if xerr != nil {
-		rlog.Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
+		zl.Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
 	}
 
 	return
@@ -175,7 +187,6 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			if e.rd != nil {
 				inDebug, outDebug = e.rd.IsDebugRequired(token.ApplicationPayload())
 			}
-
 			ctx.SetTokenPayload(token.ApplicationPayload())
 		}
 

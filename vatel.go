@@ -21,6 +21,7 @@ type TokenPayloader interface {
 	Role() int
 	Perms() []byte
 	Extra() interface{}
+	Debug() bool
 }
 
 // Tokener is the interface that wraps methods SystemPayload and UserPayload.
