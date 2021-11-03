@@ -99,7 +99,7 @@ func (v *Vatel) SetAuthorizer(a Authorizer) {
 	v.auth = a
 }
 
-func (v *Vatel) SetRevokeTokenCheker(rtc RevokeTokenChecker) {
+func (v *Vatel) SetRevokeTokenChecker(rtc RevokeTokenChecker) {
 	v.rtc = rtc
 }
 
