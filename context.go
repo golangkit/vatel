@@ -11,8 +11,6 @@ import (
 type Context interface {
 	BodyWriter() io.Writer
 	SetContentType([]byte) *VatelContext
-	Log(key string, val interface{}) *VatelContext
-	LogValues() map[string]interface{}
 	SetStatusCode(code int) *VatelContext
 	FormFile(key string) (*multipart.FileHeader, error)
 	FormValue(key string) []byte
@@ -22,10 +20,12 @@ type Context interface {
 	SetTokenPayload(tp TokenPayloader)
 	SetHeader(name, val []byte) *VatelContext
 	RequestCtx() *fasthttp.RequestCtx
+	Set(key string, val interface{}) *VatelContext
+	Get(key string) interface{}
+	VisitUserValues(func(key []byte, val interface{}))
 }
 
 type VatelContext struct {
-	context.Context
 	cancel context.CancelFunc
 	fh     *fasthttp.RequestCtx
 	kv     map[string]interface{}
@@ -98,4 +98,17 @@ func (ctx *VatelContext) SetStatusCode(code int) *VatelContext {
 // RequestCtx returns fasthttp's context.
 func (ctx *VatelContext) RequestCtx() *fasthttp.RequestCtx {
 	return ctx.fh
+}
+
+func (ctx *VatelContext) Get(key string) interface{} {
+	return ctx.fh.UserValue(key)
+}
+
+func (ctx *VatelContext) Set(key string, val interface{}) *VatelContext {
+	ctx.fh.SetUserValue(key, val)
+	return ctx
+}
+
+func (ctx *VatelContext) VisitUserValues(f func(key []byte, v interface{})) {
+	ctx.fh.VisitUserValues(f)
 }

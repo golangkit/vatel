@@ -71,26 +71,54 @@ type Logger interface {
 
 // Vatel holds
 type Vatel struct {
-	ep      []Endpoint
-	params  map[string]string
-	uprefix string
-	auth    Authorizer
-	td      TokenDecoder
-	pm      PermissionManager
-	rd      RequestDebugger
-	rtc     RevokeTokenChecker
+	ep   []Endpoint
+	auth Authorizer
+	td   TokenDecoder
+	pm   PermissionManager
+	rd   RequestDebugger
+	rtc  RevokeTokenChecker
 
 	mdw []func(Context) error
-	nfh func(Context) error
 
 	authDisabled bool
+	cfg          Option
 }
 
 // NewVatel returns new instance of Vatel.
-func NewVatel(urlprefix string) *Vatel {
-	v := Vatel{params: map[string]string{}, uprefix: urlprefix}
+func NewVatel(optFunc ...func(*Option)) *Vatel {
+
+	v := Vatel{}
+
+	for i := range optFunc {
+		optFunc[i](&v.cfg)
+	}
+
 	v.ep = []Endpoint{{Method: "GET", Path: "/", Controller: func() Handler { return &tocController{s: &v} }}}
 	return &v
+}
+
+type Option struct {
+	urlPrefix          string
+	staticLoggingLevel bool
+	defaultLogOption   LogOption
+}
+
+func WithUrlPrefix(s string) func(*Option) {
+	return func(o *Option) {
+		o.urlPrefix = s
+	}
+}
+
+func WithStaticLoggingLevel() func(*Option) {
+	return func(o *Option) {
+		o.staticLoggingLevel = true
+	}
+}
+
+func WithDefaultLogOption(lo LogOption) func(*Option) {
+	return func(o *Option) {
+		o.defaultLogOption = lo
+	}
 }
 
 // SetAuthorizer assigns authorization implementation.
@@ -99,6 +127,8 @@ func (v *Vatel) SetAuthorizer(a Authorizer) {
 	v.auth = a
 }
 
+// SetRevokeTokenChecker assigns implementation of access token
+// validation in the storage of revoked access tokens.
 func (v *Vatel) SetRevokeTokenChecker(rtc RevokeTokenChecker) {
 	v.rtc = rtc
 }
@@ -107,7 +137,8 @@ func (v *Vatel) DisableAuthorizer() {
 	v.authDisabled = true
 }
 
-// SetPermissionManager assigns permission manager implementation.
+// SetPermissionManager assigns implementation of permission manager.
+//
 func (v *Vatel) SetPermissionManager(pm PermissionManager) {
 	v.pm = pm
 }
@@ -124,7 +155,7 @@ func (v *Vatel) SetTokenDecoder(tp TokenDecoder) {
 
 // Add add endpoints to the list.
 //
-// The method does not check Endpoint for correctes and uqiqueness here.
+// The method does not check Endpoint for corectness and uqiqueness here.
 // Paths validation implemented by method BuildHandlers.
 func (v *Vatel) Add(e ...Endpointer) {
 	for i := range e {
@@ -132,17 +163,12 @@ func (v *Vatel) Add(e ...Endpointer) {
 	}
 }
 
-// Set assigns related
-func (v *Vatel) Set(key, value string) {
-	v.params[key] = value
-}
-
 // Endpoints returns all registered endpoints.
 func (v *Vatel) Endpoints() []Endpoint {
 	return v.ep
 }
 
-// MustBuildHandlers initializes http muxer with rules by converting []Endpoint
+// MustBuildHandlers initializes http mux with rules by converting []Endpoint
 // added before. Panics if:
 // 	- there are Perms but SetAuthorizer or SetTokenDecoder were not called.
 // 	-
@@ -152,8 +178,8 @@ func (v *Vatel) MustBuildHandlers(mux *router.Router, l *zerolog.Logger) {
 	}
 }
 
-// BuildHandlers initializes http muxer with rules by converting []Endpoint
-// added before.
+// BuildHandlers initializes http mux with rules by converting []Endpoint
+// added before. Returns errors instead of panic.
 func (v *Vatel) BuildHandlers(mux *router.Router, l *zerolog.Logger) error {
 	return v.buildHandlers(mux, l)
 }
@@ -178,9 +204,14 @@ func (v *Vatel) buildHandlers(mux *router.Router, l *zerolog.Logger) error {
 		}
 
 		logger := l.With().Str("method", e.Method).Str("path", e.Path).Logger()
-		mux.Handle(e.Method, e.Path, fasthttp.CompressHandler(e.handler(&logger)))
+		if e.Compress {
+			mux.Handle(e.Method, e.Path, fasthttp.CompressHandler(e.handler(&logger)))
+		} else {
+			mux.Handle(e.Method, e.Path, e.handler(&logger))
+		}
 		logger.Info().Msg("handler registered")
 	}
+
 	return nil
 }
 
@@ -189,10 +220,8 @@ type Dater interface {
 	Set(interface{})
 }
 
+// AddMiddleware adds middlewares to be called for every requests in
+// the same order.
 func (v *Vatel) AddMiddleware(f ...func(Context) error) {
 	v.mdw = append(v.mdw, f...)
-}
-
-func (v *Vatel) NotFoundHandler(f func(Context) error) {
-	v.nfh = f
 }

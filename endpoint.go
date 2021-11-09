@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/axkit/date"
@@ -15,17 +16,39 @@ import (
 
 	//	goon "github.com/shurcooL/go-goon"
 	//	"github.com/hexops/valast"
+	realip "github.com/Ferluci/fast-realip"
 	"github.com/valyala/fasthttp"
+)
+
+type LogOption uint32
+
+const (
+	LogSilent LogOption = 1 << iota
+	LogEnter
+	LogExit
+	LogReqBody
+	LogReqInput
+	LogRespBody
+	LogRespOutput
+)
+
+const (
+	LogUnknown    LogOption = 0
+	LogFull                 = LogEnter | LogExit | LogReqBody | LogReqInput | LogRespBody
+	LogFullOnExit           = LogExit | LogReqBody | LogReqInput | LogRespBody
+	LogConfident            = LogExit
 )
 
 // Endpoint describes a REST endpoint attributes and related request Handler.
 type Endpoint struct {
-
-	// SuppressLog holds rule to suppress all log output for the handler.
-	SuppressLog bool
+	staticLoggingLevel bool
+	LogOptions         LogOption
 
 	// Method holds HTTP method name (e.g GET, POST, PUT, DELETE).
 	Method string
+
+	// Wraps response by gzip compression function.
+	Compress bool
 
 	// Path holds url path with fasthttp parameters (e.g. /customers/{id}).
 	Path string
@@ -55,7 +78,7 @@ type Endpoint struct {
 	isPathParametrized    bool
 	isURLQueryExpected    bool
 	isRequestBodyExpected bool
-	isResulter            bool
+	hasRespBody           bool
 
 	LanguageLabel string // #Cannon
 	auth          Authorizer
@@ -129,35 +152,41 @@ type Paramer interface {
 	Param() interface{}
 }
 
-func writeErrorResponse(ctx Context, zl *zerolog.Logger, err error) {
+func writeErrorResponse(ctx Context, zc *zerolog.Context, err error) {
 	if err == nil {
 		return
 	}
 
-	isDebugMode := false
-
+	isDebugRequest := false
 	if t := ctx.TokenPayload(); t != nil {
-		isDebugMode = t.Debug()
+		isDebugRequest = t.Debug()
 	}
 
 	statusCode := 500
 	if ce, ok := err.(*errors.CatchedError); ok {
 		statusCode = ce.Last().StatusCode
 	}
-	zl.Error().RawJSON("err", errors.ToServerJSON(err)).Msg("request failed")
+
+	z := *zc
+	ctx.VisitUserValues(func(key []byte, v interface{}) {
+		z = z.Interface(string(key), v)
+	})
+
+	zl := z.RawJSON("err", errors.ToServerJSON(err)).Logger()
+	zl.Error().Msg("request failed")
 
 	ctx.SetContentType([]byte("application/json; charset=utf-8"))
 	ctx.SetStatusCode(statusCode)
 
 	var ff errors.FormattingFlag
-	if isDebugMode {
+	if isDebugRequest {
 		ff = errors.AddStack & errors.AddFields & errors.AddWrappedErrors
 	}
 
 	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
 
 	if xerr != nil {
-		zl.Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
+		//zl.With().Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
 	}
 
 	return
@@ -167,72 +196,104 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 	return func(fctx *fasthttp.RequestCtx) {
 
-		inDebug, outDebug := !e.NoInputLog, !e.NoResultLog
+		var (
+			zc  zerolog.Context
+			zco zerolog.Context
+		)
 
-		logger := l.With().Uint64("reqid", fctx.ID()).Logger()
-		if !e.SuppressLog {
-			logger.Info().
-				Bool("private", len(e.Perms) > 0).
-				Str("from", fctx.RemoteAddr().String()).
-				Msg("new request")
+		var lo LogOption
+		if !e.staticLoggingLevel {
+			lo = LogOption(atomic.LoadUint32((*uint32)(&e.LogOptions)))
+		} else {
+			lo = e.LogOptions
 		}
+
+		zco = l.With().Uint64("reqId", fctx.ID()).Str("client", realip.FromRequest(fctx))
+		zc = zco
+
+		// inDebug := e.LogOptions&ConfidentialInput != ConfidentialInput
+		// outDebug := e.LogOptions&ConfidentialOutput != ConfidentialOutput
 
 		ctx := NewContext(fctx)
 		if len(e.Perms) > 0 && e.auth != nil {
+			switch len(e.Perms) {
+			case 0:
+				break
+			case 1:
+				zc = zc.Str("perm", e.Perms[0])
+			default:
+				zc = zc.Strs("perms", e.Perms)
+			}
+
 			token, err := e.authorize(fctx)
 			if err != nil {
-				writeErrorResponse(ctx, &logger, err)
+				writeErrorResponse(ctx, &zc, err)
 				return
 			}
+
 			if e.rd != nil {
-				inDebug, outDebug = e.rd.IsDebugRequired(token.ApplicationPayload())
+				//	inDebug, outDebug = e.rd.IsDebugRequired(token.ApplicationPayload())
 			}
 			ctx.SetTokenPayload(token.ApplicationPayload())
 		}
 
 		if fctx.QueryArgs().GetBool("description") {
 			if err := e.handleDescription(ctx); err != nil {
-				writeErrorResponse(ctx, &logger, err)
+				writeErrorResponse(ctx, &zc, err)
 			}
 			return
 		}
 
-		c, err := e.initController(fctx, &logger, inDebug)
+		zc, h, err := e.initController(fctx, lo, zc)
 		if err != nil {
-			writeErrorResponse(ctx, &logger, err)
+			writeErrorResponse(ctx, &zc, err)
 			return
 		}
 
 		for i := range e.middlewares {
 			if err := e.middlewares[i](ctx); err != nil {
-				writeErrorResponse(ctx, &logger, err)
+				writeErrorResponse(ctx, &zc, err)
 				return
 			}
 		}
 
-		if err = c.Handle(ctx); err != nil {
-			writeErrorResponse(ctx, &logger, err)
+		if lo&LogEnter == LogEnter {
+			ctx.RequestCtx().VisitUserValues(func(key []byte, v interface{}) {
+				zc = zc.Interface(string(key), v)
+			})
+
+			zl := zc.Logger()
+			zl.Debug().Msg("new request")
+			zc = zco
+		}
+
+		if err = h.Handle(ctx); err != nil {
+			writeErrorResponse(ctx, &zc, err)
 			return
 		}
 
-		var elog *zerolog.Event
-		if outDebug {
-			elog = logger.Debug()
-		} else {
-			elog = logger.Info()
-		}
-		resp, ok := c.(Resulter)
-		if ok {
-			r := resp.Result()
-			if outDebug && !e.SuppressLog {
-				elog.Interface("result", r)
+		if e.hasRespBody {
+			res := h.(Resulter).Result()
+
+			if lo&LogRespBody == LogRespBody {
+				buf, err := json.Marshal(res)
+				if err != nil {
+					zc = zc.Interface("result", res)
+					writeErrorResponse(ctx, &zc, err)
+					return
+				}
+				zc = zc.RawJSON("respBody", buf)
+				if _, err := ctx.BodyWriter().Write(buf); err != nil {
+					writeErrorResponse(ctx, &zc, err)
+				}
+			} else {
+				if err := json.NewEncoder(ctx.BodyWriter()).Encode(res); err != nil {
+					writeErrorResponse(ctx, &zc, err)
+					return
+				}
 			}
 
 			fctx.SetContentTypeBytes(e.responseContentType)
-			if err := json.NewEncoder(ctx.BodyWriter()).Encode(resp.Result()); err != nil {
-				writeErrorResponse(ctx, &logger, err)
-				return
-			}
 		} else {
 			if !e.ManualStatusCode {
 				//fctx.Response().StatusCode(204)
@@ -243,12 +304,17 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			// например обработчик отдачи файлов.
 		}
 
-		if kv := ctx.LogValues(); len(kv) > 0 && !e.SuppressLog {
-			elog.Interface("hval", kv)
-		}
+		if lo&LogExit == LogExit {
+			msg := "completed"
+			if e.LogOptions&LogEnter != LogEnter {
+				msg = "processed"
+			}
+			ctx.VisitUserValues(func(key []byte, v interface{}) {
+				zc = zc.Interface(string(key), v)
+			})
 
-		if !e.SuppressLog {
-			elog.Str("dur", time.Since(fctx.Time()).String()).Msg("completed")
+			zl := zc.Logger()
+			zl.Debug().Str("dur", time.Since(fctx.Time()).String()).Msg(msg)
 		}
 	}
 }
@@ -300,139 +366,43 @@ func (e *Endpoint) authorize(ctx *fasthttp.RequestCtx) (Tokener, error) {
 
 }
 
-func (e *Endpoint) initController(ctx *fasthttp.RequestCtx, plog *zerolog.Logger, debug bool) (Handler, error) {
+func (e *Endpoint) initController(ctx *fasthttp.RequestCtx, lo LogOption, zc zerolog.Context) (zerolog.Context, Handler, error) {
 
-	var elog *zerolog.Event
-	if debug {
-		elog = plog.Debug()
-	}
-
-	c := e.Controller()
+	var (
+		err error
+		h   = e.Controller()
+	)
 
 	if e.isPathParametrized {
-		p := c.(Paramer).Param()
-		if err := decodeParams(ctx, p); err != nil {
-			return nil, err
-		}
-		if debug {
-			elog.Interface("param", p)
+		p := h.(Paramer).Param()
+		if zc, err = decodeParams(ctx, p, zc); err != nil {
+			return zc, nil, err
 		}
 	}
 
 	if e.isURLQueryExpected {
-		in := c.(Inputer).Input()
-		if err := decodeURLQuery(ctx, in); err != nil {
-			return nil, err
-		}
-		if debug {
-			elog.Interface("urlquery", in)
+		in := h.(Inputer).Input()
+		if zc, err = decodeURLQuery(ctx, in, zc); err != nil {
+			return zc, nil, err
 		}
 	}
 
 	if e.isRequestBodyExpected {
-		in := c.(Inputer).Input()
+		if lo&LogReqBody == LogReqBody {
+			zc = zc.RawJSON("reqBody", ctx.Request.Body())
+		}
+
+		in := h.(Inputer).Input()
 		if err := decodeBody(ctx, in); err != nil {
-			return nil, err
+			return zc, nil, err
 		}
-		if debug && !e.NoInputLog {
-			elog.Interface("body", in)
+		if lo&LogReqInput == LogReqInput {
+			zc = zc.Interface("reqInput", in)
 		}
 	}
 
-	if debug && (e.isPathParametrized || e.isURLQueryExpected || e.isRequestBodyExpected) {
-		elog.Msg("request parsed")
-	}
-
-	return c, nil
+	return zc, h, nil
 }
-
-// Handler реализует типовой обработчик HTTP запроса, враппер вокруг fasthttp.
-// func BaseHandler(r *Route, l *zerolog.Logger) func(*fasthttp.RequestCtx) {
-
-// 	_, param := r.Controller().(Paramer)
-// 	r.isPathParametrized = strings.Contains(r.Path, "/:") && param
-
-// 	_, input := r.Controller().(Inputer)
-// 	if r.Method == "GET" {
-// 		r.isURLQueryExpected = input
-// 	} else {
-// 		r.isRequestBodyExpected = input
-// 	}
-
-// 	return func(ctx *fasthttp.RequestCtx) {
-// 		t := time.Now()
-// 		logger := l.With().Str("path", r.Path).Str("method", r.Method).Uint64("reqid", ctx.ID()).IPAddr("ip", ctx.RemoteIP()).Logger()
-
-// 		if len(r.Perms) > 0 {
-// 			// получаем параметры сессии (для определения прав доступных пользователю)
-// 			// и проверяем наличие у пользователя перма среди требуемых r.Perm
-// 		}
-
-// 		if ctx.QueryArgs().GetBool("description") == true {
-// 			logger.Info().Msg("description requested")
-// 			ctx.Response.Header.SetContentType("text/html; charset=utf8")
-// 			_, err := ctx.Write(Doc(r))
-// 			if err != nil {
-// 				logger.Error().Str("errmsg", err.Error()).Msg("description response write failed")
-// 			}
-// 			return
-// 		}
-
-// 		obj := r.Controller()
-
-// 		if r.isPathParametrized {
-
-// 			if err := assignParams(ctx, obj.(Paramer).Param()); err != nil {
-// 				logger.Error().Str("errmsg", err.Error()).Msg("invalid path parameter")
-// 				ctx.Response.SetStatusCode(fasthttp.StatusBadRequest)
-// 				ctx.WriteString(err.Error())
-// 				return
-// 			}
-// 		}
-
-// 		if r.isURLQueryExpected {
-// 			if err := assignURLInput(ctx, obj.(Inputer).Input()); err != nil {
-// 				logger.Error().Str("errmsg", err.Error()).Msg("invalid url query parameter")
-// 				ctx.Response.SetStatusCode(fasthttp.StatusBadRequest)
-// 				ctx.WriteString(err.Error())
-// 				return
-// 			}
-// 		}
-
-// 		if r.isRequestBodyExpected {
-// 			if err := assignBodyInput(ctx, obj.(Inputer).Input()); err != nil {
-// 				logger.Error().Str("errmsg", err.Error()).Msg("invalid body input data")
-// 				ctx.Response.SetStatusCode(fasthttp.StatusBadRequest)
-// 				ctx.WriteString(err.Error())
-// 				return
-// 			}
-// 		}
-
-// 		if err := obj.Handle(ctx); err != nil {
-// 			logger.Error().Str("errmsg", err.Error()).Msg("invalid body input data")
-// 			ctx.Response.SetStatusCode(fasthttp.StatusBadRequest)
-// 			ctx.WriteString(err.Error())
-// 			return
-// 		}
-
-// 		resp, ok := obj.(Resulter)
-// 		if !ok {
-// 			// если тела ответа в виде JSON объекта не предполагается, то ожидается
-// 			// что сам обработчик obj.Haldler() установит соответствующие статусы
-// 			// и запишет в тело ответа соответствующие заголовки.
-// 			// например обработчик отдачи файлов.
-// 			return
-// 		}
-
-// 		ctx.SetContentType("application/json; charset=utf-8")
-
-// 		if err := json.NewEncoder(ctx.Response.BodyWriter()).Encode(resp.Result()); err != nil {
-// 			logger.Error().Str("errmsg", err.Error()).Msg("response write failed")
-// 			return
-// 		}
-// 		logger.Info().Str("dur", time.Since(t).String()).Msg("completed")
-// 	}
-// }
 
 // Doc возвращает описание входных и выходных параметров контроллера.
 func (e *Endpoint) handleDescription(ctx Context) error {
@@ -467,7 +437,7 @@ func (e *Endpoint) genDescription(c Handler) []byte {
 		//s += "URL input\n" + valast.String(c.(Inputer).Input())
 	}
 
-	if e.isResulter {
+	if e.hasRespBody {
 		//s += "\n" + valast.String(c.(Resulter).Result())
 	}
 
@@ -475,8 +445,9 @@ func (e *Endpoint) genDescription(c Handler) []byte {
 }
 
 // TODO: сделать поддержку param не в виде структуры, а в виде одной переменной.
-func decodeParams(ctx *fasthttp.RequestCtx, param interface{}) error {
+func decodeParams(ctx *fasthttp.RequestCtx, param interface{}, zcin zerolog.Context) (zerolog.Context, error) {
 
+	zc := zcin
 	s := reflect.ValueOf(param).Elem()
 	tof := s.Type()
 
@@ -496,17 +467,20 @@ func decodeParams(ctx *fasthttp.RequestCtx, param interface{}) error {
 		if !ok {
 			panic("non string param")
 		}
+
+		zc = zc.Interface(tag, val)
+
 		switch sf.Interface().(type) {
 		case int, int8, int16, int32, int64:
 			i, err := strconv.ParseInt(val, 10, 64)
 			if err != nil {
-				return errors.ValidationFailed(err.Error())
+				return zc, errors.ValidationFailed(err.Error())
 			}
 			sf.SetInt(i)
 		case uint, uint8, uint16, uint32, uint64:
 			i, err := strconv.ParseUint(val, 10, 64)
 			if err != nil {
-				return errors.ValidationFailed(err.Error())
+				return zc, errors.ValidationFailed(err.Error())
 			}
 			sf.SetUint(i)
 		case string:
@@ -514,22 +488,22 @@ func decodeParams(ctx *fasthttp.RequestCtx, param interface{}) error {
 		case bool:
 			b, err := strconv.ParseBool(val)
 			if err != nil {
-				return errors.ValidationFailed(err.Error())
+				return zc, errors.ValidationFailed(err.Error())
 			}
 			sf.SetBool(b)
 		case float32, float64:
 			f, err := strconv.ParseFloat(val, 64)
 			if err != nil {
-				return errors.ValidationFailed(err.Error())
+				return zc, errors.ValidationFailed(err.Error())
 			}
 			sf.SetFloat(f)
 		case []string:
 			break
 		default:
-			return errors.ValidationFailed("unsuppoted go type").Set("tag", tag)
+			return zc, errors.ValidationFailed("unsuppoted go type").Set("tag", tag)
 		}
 	}
-	return nil
+	return zc, nil
 }
 
 func assign(val string, i interface{}) error {
@@ -544,7 +518,7 @@ func decodeBody(ctx *fasthttp.RequestCtx, dest interface{}) error {
 	return json.Unmarshal(buf, dest)
 }
 
-func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
+func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}, zc zerolog.Context) (zerolog.Context, error) {
 
 	s := reflect.ValueOf(input).Elem()
 	tof := s.Type()
@@ -558,8 +532,8 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 		}
 
 		if sf.Kind() == reflect.Struct {
-			if err := decodeURLQuery(ctx, sf.Addr().Interface()); err != nil {
-				return err
+			if zc, err := decodeURLQuery(ctx, sf.Addr().Interface(), zc); err != nil {
+				return zc, err
 			}
 			continue
 		}
@@ -570,6 +544,7 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 		}
 
 		val := ctx.QueryArgs().Peek(tag)
+		zc = zc.Bytes(tag, val)
 		if val == nil {
 			continue
 		}
@@ -585,7 +560,7 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 			if _, ok := sf.Interface().(date.Date); ok {
 				d, err := date.Parse(string(val))
 				if err != nil {
-					return err
+					return zc, err
 				}
 				sf.SetUint(uint64(d))
 			}
@@ -596,13 +571,13 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			k, err := strconv.ParseInt(string(val), 10, 64)
 			if err != nil {
-				return err
+				return zc, err
 			}
 			sf.SetInt(k)
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			k, err := strconv.ParseUint(string(val), 10, 64)
 			if err != nil {
-				return err
+				return zc, err
 			}
 			sf.SetUint(k)
 		case reflect.String:
@@ -610,38 +585,46 @@ func decodeURLQuery(ctx *fasthttp.RequestCtx, input interface{}) error {
 		case reflect.Float64:
 			k, err := strconv.ParseFloat(string(val), 64)
 			if err != nil {
-				return err
+				return zc, err
 			}
 			sf.SetFloat(k)
 		case reflect.Float32:
 			k, err := strconv.ParseFloat(string(val), 32)
 			if err != nil {
-				return err
+				return zc, err
 			}
 			sf.SetFloat(k)
 		case reflect.Bool:
 			b, err := strconv.ParseBool(string(val))
 			if err != nil {
-				return err
+				return zc, err
 			}
 			sf.SetBool(b)
 		default:
-
-			return errors.ValidationFailed("unsupported type").Set("val", string(val)).Set("kind", sf.Kind().String())
+			return zc, errors.ValidationFailed("unsupported type").Set("val", string(val)).Set("kind", sf.Kind().String())
 		}
 	}
-	return nil
+	return zc, nil
 }
 
 func (e *Endpoint) compile(v *Vatel) error {
 	opath := e.Path
-	e.Path = path.Join(v.uprefix, e.Path)
+	e.Path = path.Join(v.cfg.urlPrefix, e.Path)
 	e.auth = v.auth
 	e.td = v.td
 	e.pm = v.pm
 	e.rd = v.rd
 	e.rtc = v.rtc
 	e.middlewares = v.mdw
+	e.staticLoggingLevel = v.cfg.staticLoggingLevel
+
+	if e.LogOptions == LogUnknown {
+		e.LogOptions = v.cfg.defaultLogOption
+	}
+
+	if e.LogOptions&LogSilent == e.LogOptions {
+		e.LogOptions = e.LogOptions
+	}
 
 	if e.ResponseContentType != "" {
 		e.responseContentType = []byte(e.ResponseContentType)
@@ -688,6 +671,8 @@ func (e *Endpoint) compile(v *Vatel) error {
 		return fmt.Errorf("endpoint %s %s path has no parameters, but controller implement Paramer", e.Method, opath)
 	}
 	e.isPathParametrized = isParamer
+
+	_, e.hasRespBody = c.(Resulter)
 
 	_, isInputer := c.(Inputer)
 	switch e.Method {
