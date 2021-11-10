@@ -33,10 +33,10 @@ const (
 )
 
 const (
-	LogUnknown    LogOption = 0
-	LogFull                 = LogEnter | LogExit | LogReqBody | LogReqInput | LogRespBody
-	LogFullOnExit           = LogExit | LogReqBody | LogReqInput | LogRespBody
-	LogConfident            = LogExit
+	LogUnknown      LogOption = 0
+	LogFull                   = LogEnter | LogExit | LogReqBody | LogReqInput | LogRespBody
+	LogFullOnExit             = LogExit | LogReqBody | LogReqInput | LogRespBody
+	LogConfidential           = LogExit
 )
 
 // Endpoint describes a REST endpoint attributes and related request Handler.
