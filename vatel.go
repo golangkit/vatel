@@ -101,6 +101,7 @@ type Option struct {
 	urlPrefix          string
 	staticLoggingLevel bool
 	defaultLogOption   LogOption
+	verboseError       bool
 }
 
 func WithUrlPrefix(s string) func(*Option) {
@@ -112,6 +113,13 @@ func WithUrlPrefix(s string) func(*Option) {
 func WithStaticLoggingLevel() func(*Option) {
 	return func(o *Option) {
 		o.staticLoggingLevel = true
+	}
+}
+
+// WithVerboseError sets verbose mode for error responce.
+func WithVerboseError() func(*Option) {
+	return func(o *Option) {
+		o.verboseError = true
 	}
 }
 

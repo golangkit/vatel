@@ -42,6 +42,7 @@ const (
 // Endpoint describes a REST endpoint attributes and related request Handler.
 type Endpoint struct {
 	staticLoggingLevel bool
+	verboseError       bool
 	LogOptions         LogOption
 
 	// Method holds HTTP method name (e.g GET, POST, PUT, DELETE).
@@ -152,14 +153,9 @@ type Paramer interface {
 	Param() interface{}
 }
 
-func writeErrorResponse(ctx Context, zc *zerolog.Context, err error) {
+func writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err error) {
 	if err == nil {
 		return
-	}
-
-	isDebugRequest := false
-	if t := ctx.TokenPayload(); t != nil {
-		isDebugRequest = t.Debug()
 	}
 
 	statusCode := 500
@@ -179,8 +175,8 @@ func writeErrorResponse(ctx Context, zc *zerolog.Context, err error) {
 	ctx.SetStatusCode(statusCode)
 
 	var ff errors.FormattingFlag
-	if isDebugRequest {
-		ff = errors.AddStack & errors.AddFields & errors.AddWrappedErrors
+	if verbose {
+		ff = errors.AddStack | errors.AddFields | errors.AddWrappedErrors
 	}
 
 	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
@@ -200,6 +196,8 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			zc  zerolog.Context
 			zco zerolog.Context
 		)
+
+		verbose := e.verboseError
 
 		var lo LogOption
 		if !e.staticLoggingLevel {
@@ -227,32 +225,34 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 			token, err := e.authorize(fctx)
 			if err != nil {
-				writeErrorResponse(ctx, &zc, err)
+				writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 
 			if e.rd != nil {
 				//	inDebug, outDebug = e.rd.IsDebugRequired(token.ApplicationPayload())
 			}
-			ctx.SetTokenPayload(token.ApplicationPayload())
+			t := token.ApplicationPayload()
+			ctx.SetTokenPayload(t)
+			verbose = verbose || t.Debug()
 		}
 
 		if fctx.QueryArgs().GetBool("description") {
 			if err := e.handleDescription(ctx); err != nil {
-				writeErrorResponse(ctx, &zc, err)
+				writeErrorResponse(ctx, verbose, &zc, err)
 			}
 			return
 		}
 
 		zc, h, err := e.initController(fctx, lo, zc)
 		if err != nil {
-			writeErrorResponse(ctx, &zc, err)
+			writeErrorResponse(ctx, verbose, &zc, err)
 			return
 		}
 
 		for i := range e.middlewares {
 			if err := e.middlewares[i](ctx); err != nil {
-				writeErrorResponse(ctx, &zc, err)
+				writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 		}
@@ -268,7 +268,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		}
 
 		if err = h.Handle(ctx); err != nil {
-			writeErrorResponse(ctx, &zc, err)
+			writeErrorResponse(ctx, verbose, &zc, err)
 			return
 		}
 
@@ -279,16 +279,16 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 				buf, err := json.Marshal(res)
 				if err != nil {
 					zc = zc.Interface("result", res)
-					writeErrorResponse(ctx, &zc, err)
+					writeErrorResponse(ctx, verbose, &zc, err)
 					return
 				}
 				zc = zc.RawJSON("respBody", buf)
 				if _, err := ctx.BodyWriter().Write(buf); err != nil {
-					writeErrorResponse(ctx, &zc, err)
+					writeErrorResponse(ctx, verbose, &zc, err)
 				}
 			} else {
 				if err := json.NewEncoder(ctx.BodyWriter()).Encode(res); err != nil {
-					writeErrorResponse(ctx, &zc, err)
+					writeErrorResponse(ctx, verbose, &zc, err)
 					return
 				}
 			}
@@ -617,6 +617,7 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.rtc = v.rtc
 	e.middlewares = v.mdw
 	e.staticLoggingLevel = v.cfg.staticLoggingLevel
+	e.verboseError = v.cfg.verboseError
 
 	if e.LogOptions == LogUnknown {
 		e.LogOptions = v.cfg.defaultLogOption
