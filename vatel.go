@@ -78,7 +78,7 @@ type Vatel struct {
 	rd   RequestDebugger
 	rtc  RevokeTokenChecker
 
-	mdw []func(Context) error
+	mdw middlewareSet
 
 	authDisabled bool
 	cfg          Option
@@ -102,11 +102,18 @@ type Option struct {
 	staticLoggingLevel bool
 	defaultLogOption   LogOption
 	verboseError       bool
+	logRequestID       bool
 }
 
 func WithUrlPrefix(s string) func(*Option) {
 	return func(o *Option) {
 		o.urlPrefix = s
+	}
+}
+
+func WithRequestID() func(*Option) {
+	return func(o *Option) {
+		o.logRequestID = true
 	}
 }
 
@@ -116,10 +123,10 @@ func WithStaticLoggingLevel() func(*Option) {
 	}
 }
 
-// WithVerboseError sets verbose mode for error responce.
-func WithVerboseError() func(*Option) {
+// WithVerboseError sets verbose mode for error response to the client.
+func WithVerboseError(b bool) func(*Option) {
 	return func(o *Option) {
-		o.verboseError = true
+		o.verboseError = b
 	}
 }
 
@@ -230,6 +237,6 @@ type Dater interface {
 
 // AddMiddleware adds middlewares to be called for every requests in
 // the same order.
-func (v *Vatel) AddMiddleware(f ...func(Context) error) {
-	v.mdw = append(v.mdw, f...)
+func (v *Vatel) AddMiddleware(pos MiddlewarePos, f ...func(Context) error) {
+	v.mdw[pos] = append(v.mdw[pos], f...)
 }

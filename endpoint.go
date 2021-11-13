@@ -39,10 +39,22 @@ const (
 	LogConfidential           = LogExit
 )
 
+type MiddlewarePos int
+
+const (
+	BeforeAuthorization MiddlewarePos = iota
+	AfterAuthorization
+	OnSuccessResponse
+	OnErrorResponse
+)
+
+type middlewareSet [3][]func(Context) error
+
 // Endpoint describes a REST endpoint attributes and related request Handler.
 type Endpoint struct {
 	staticLoggingLevel bool
 	verboseError       bool
+	logRequestID       bool
 	LogOptions         LogOption
 
 	// Method holds HTTP method name (e.g GET, POST, PUT, DELETE).
@@ -57,7 +69,7 @@ type Endpoint struct {
 	// Perms holds list of permissions. Nil if endpoint is public.
 	Perms []string
 
-	// Controller holds reference to the object impementing interface Handler.
+	// Controller holds reference to the object implementing interface Handler.
 	Controller func() Handler
 
 	// ResponseContentType by default has "application/json; charset: utf-8;"
@@ -89,7 +101,7 @@ type Endpoint struct {
 	rtc           RevokeTokenChecker
 	perms         []uint
 
-	middlewares []func(Context) error
+	middlewares middlewareSet
 }
 
 // NewEndpoint builds Endpoint.
@@ -206,13 +218,24 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			lo = e.LogOptions
 		}
 
-		zco = l.With().Uint64("reqId", fctx.ID()).Str("client", realip.FromRequest(fctx))
+		zco = l.With().Str("client", realip.FromRequest(fctx))
+		if e.logRequestID {
+			zco = zco.Uint64("reqId", fctx.ID())
+		}
 		zc = zco
+
+		ctx := NewContext(fctx)
+
+		for i := range e.middlewares[BeforeAuthorization] {
+			if err := e.middlewares[BeforeAuthorization][i](ctx); err != nil {
+				writeErrorResponse(ctx, verbose, &zc, err)
+				return
+			}
+		}
 
 		// inDebug := e.LogOptions&ConfidentialInput != ConfidentialInput
 		// outDebug := e.LogOptions&ConfidentialOutput != ConfidentialOutput
 
-		ctx := NewContext(fctx)
 		if len(e.Perms) > 0 && e.auth != nil {
 			switch len(e.Perms) {
 			case 0:
@@ -250,8 +273,8 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			return
 		}
 
-		for i := range e.middlewares {
-			if err := e.middlewares[i](ctx); err != nil {
+		for i := range e.middlewares[AfterAuthorization] {
+			if err := e.middlewares[AfterAuthorization][i](ctx); err != nil {
 				writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
@@ -315,6 +338,13 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 			zl := zc.Logger()
 			zl.Debug().Str("dur", time.Since(fctx.Time()).String()).Msg(msg)
+		}
+
+		for i := range e.middlewares[OnSuccessResponse] {
+			if err := e.middlewares[OnSuccessResponse][i](ctx); err != nil {
+				writeErrorResponse(ctx, verbose, &zc, err)
+				return
+			}
 		}
 	}
 }
@@ -618,6 +648,7 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.middlewares = v.mdw
 	e.staticLoggingLevel = v.cfg.staticLoggingLevel
 	e.verboseError = v.cfg.verboseError
+	e.logRequestID = v.cfg.logRequestID
 
 	if e.LogOptions == LogUnknown {
 		e.LogOptions = v.cfg.defaultLogOption
