@@ -1,6 +1,7 @@
 package vatel
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -171,8 +172,24 @@ func writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err erro
 	}
 
 	statusCode := 500
-	if ce, ok := err.(*errors.CatchedError); ok {
+	ce, ok := err.(*errors.CatchedError)
+	if ok {
 		statusCode = ce.Last().StatusCode
+		if statusCode == 429 {
+			// in case of too many requests, look if error has attribute Retry-After
+			var hv []byte
+			if ra, ok := ce.Get("Retry-After"); ok {
+				switch ra.(type) {
+				case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
+					hv = []byte(fmt.Sprintf("%d", ra))
+				case string:
+					hv = []byte(ra.(string))
+				case []byte:
+					hv = ra.([]byte)
+				}
+				ctx.SetHeader([]byte("Retry-After"), hv)
+			}
+		}
 	}
 
 	z := *zc
@@ -333,6 +350,10 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 				msg = "processed"
 			}
 			ctx.VisitUserValues(func(key []byte, v interface{}) {
+				if bytes.Equal(key, []byte("message")) {
+					msg = v.(string)
+					return
+				}
 				zc = zc.Interface(string(key), v)
 			})
 
@@ -358,7 +379,7 @@ func (e *Endpoint) authorize(ctx *fasthttp.RequestCtx) (Tokener, error) {
 
 	at := ctx.Request.Header.Peek("Authorization")
 	if len(at) == 0 {
-		return nil, ErrAuthorizationHeaderMissed
+		return nil, ErrAuthorizationHeaderMissed.Capture()
 	}
 
 	if e.rtc != nil {
@@ -368,7 +389,7 @@ func (e *Endpoint) authorize(ctx *fasthttp.RequestCtx) (Tokener, error) {
 		}
 
 		if isRevoked {
-			return nil, ErrAccessTokenRevoked
+			return nil, ErrAccessTokenRevoked.Capture()
 		}
 	}
 
