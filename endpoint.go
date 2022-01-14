@@ -13,6 +13,7 @@ import (
 
 	"github.com/axkit/date"
 	"github.com/axkit/errors"
+	"github.com/axkit/vatel/jsonmask"
 	"github.com/rs/zerolog"
 
 	//	goon "github.com/shurcooL/go-goon"
@@ -103,6 +104,12 @@ type Endpoint struct {
 	perms         []uint
 
 	middlewares middlewareSet
+
+	jm           JsonMasker
+	inputFields  jsonmask.Fields
+	resultFields jsonmask.Fields
+
+	ala Alarmer
 }
 
 // NewEndpoint builds Endpoint.
@@ -313,35 +320,10 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		}
 
 		if e.hasRespBody {
-			res := h.(Resulter).Result()
-
-			if lo&LogRespBody == LogRespBody {
-				buf, err := json.Marshal(res)
-				if err != nil {
-					zc = zc.Interface("result", res)
-					writeErrorResponse(ctx, verbose, &zc, err)
-					return
-				}
-				zc = zc.RawJSON("respBody", buf)
-				if _, err := ctx.BodyWriter().Write(buf); err != nil {
-					writeErrorResponse(ctx, verbose, &zc, err)
-				}
-			} else {
-				if err := json.NewEncoder(ctx.BodyWriter()).Encode(res); err != nil {
-					writeErrorResponse(ctx, verbose, &zc, err)
-					return
-				}
+			if err := e.writeResponse(ctx, lo, h.(Resulter).Result(), &zc); err != nil {
+				writeErrorResponse(ctx, verbose, &zc, err)
+				return
 			}
-
-			fctx.SetContentTypeBytes(e.responseContentType)
-		} else {
-			if !e.ManualStatusCode {
-				//fctx.Response().StatusCode(204)
-			}
-			// если тела ответа в виде JSON объекта не предполагается, то ожидается
-			// что сам обработчик obj.Haldler() установит соответствующие статусы
-			// и запишет в тело ответа соответствующие заголовки.
-			// например обработчик отдачи файлов.
 		}
 
 		if lo&LogExit == LogExit {
@@ -368,6 +350,41 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			}
 		}
 	}
+}
+
+func (e *Endpoint) writeResponse(ctx Context, lo LogOption, res interface{}, zc *zerolog.Context) error {
+
+	buf, err := json.Marshal(res)
+	if err != nil {
+		*zc = zc.Interface("result", res)
+		return err
+	}
+
+	if lo&LogRespOutput == LogRespOutput {
+		*zc = zc.Interface("result", res)
+	}
+
+	ctx.SetContentType(e.responseContentType)
+
+	if lo&LogRespBody != LogRespBody {
+		_, err = ctx.BodyWriter().Write(buf)
+		return err
+	}
+
+	if e.jm == nil || len(e.resultFields) == 0 {
+		*zc = zc.RawJSON("respBody", buf)
+		return nil
+	}
+
+	maskedBuf, err := e.jm.Mask(buf, e.resultFields)
+	if err != nil {
+		maskedBuf = []byte(`{"maskingError": "` + err.Error() + `"}`)
+	}
+
+	*zc = zc.RawJSON("maskedRespBody", maskedBuf)
+
+	_, err = ctx.BodyWriter().Write(buf)
+	return err
 }
 
 var (
@@ -440,7 +457,24 @@ func (e *Endpoint) initController(ctx *fasthttp.RequestCtx, lo LogOption, zc zer
 
 	if e.isRequestBodyExpected {
 		if lo&LogReqBody == LogReqBody {
-			zc = zc.RawJSON("reqBody", ctx.Request.Body())
+			var (
+				cJSON *bytes.Buffer // compacted json
+				buf   []byte
+			)
+
+			cJSON = bytes.NewBuffer(nil)
+			buf = cJSON.Bytes()
+			key := "requestBody"
+			err := json.Compact(cJSON, ctx.Request.Body())
+			if err == nil && e.jm != nil && len(e.inputFields) > 0 {
+				if buf, err = e.jm.Mask(cJSON.Bytes(), e.inputFields); err == nil {
+					key = "maskedRequestBody"
+				}
+			}
+			if err != nil {
+				zc = zc.Str("maskingFailedMessage", err.Error())
+			}
+			zc = zc.RawJSON(key, buf)
 		}
 
 		in := h.(Inputer).Input()
@@ -670,6 +704,8 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.staticLoggingLevel = v.cfg.staticLoggingLevel
 	e.verboseError = v.cfg.verboseError
 	e.logRequestID = v.cfg.logRequestID
+	e.jm = v.cfg.jm
+	e.ala = v.cfg.ala
 
 	if e.LogOptions == LogUnknown {
 		e.LogOptions = v.cfg.defaultLogOption
@@ -725,9 +761,17 @@ func (e *Endpoint) compile(v *Vatel) error {
 	}
 	e.isPathParametrized = isParamer
 
-	_, e.hasRespBody = c.(Resulter)
+	ri, hasRespBody := c.(Resulter)
+	if hasRespBody {
+		e.resultFields = e.jm.Fields(ri.Result(), "mask")
+	}
+	e.hasRespBody = hasRespBody
 
-	_, isInputer := c.(Inputer)
+	ii, isInputer := c.(Inputer)
+	if isInputer {
+		e.inputFields = e.jm.Fields(ii.Input(), "mask")
+	}
+
 	switch e.Method {
 	case "GET", "DELETE":
 		e.isURLQueryExpected = isInputer

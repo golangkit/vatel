@@ -63,7 +63,7 @@ func (ctx *VatelContext) SaveMultipartFile(fh *multipart.FileHeader, path string
 }
 
 func (ctx *VatelContext) SetContentType(contentType []byte) *VatelContext {
-	ctx.fh.SetContentTypeBytes(contentType)
+	ctx.fh.Response.Header.SetContentTypeBytes(contentType)
 	return ctx
 }
 

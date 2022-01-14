@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/axkit/vatel/jsonmask"
 	"github.com/fasthttp/router"
 	"github.com/rs/zerolog"
 	"github.com/valyala/fasthttp"
@@ -103,6 +104,8 @@ type Option struct {
 	defaultLogOption   LogOption
 	verboseError       bool
 	logRequestID       bool
+	jm                 JsonMasker
+	ala                Alarmer
 }
 
 func WithUrlPrefix(s string) func(*Option) {
@@ -133,6 +136,18 @@ func WithVerboseError(b bool) func(*Option) {
 func WithDefaultLogOption(lo LogOption) func(*Option) {
 	return func(o *Option) {
 		o.defaultLogOption = lo
+	}
+}
+
+func WithJsonMasker(jm JsonMasker) func(*Option) {
+	return func(o *Option) {
+		o.jm = jm
+	}
+}
+
+func WithAlarmer(ala Alarmer) func(*Option) {
+	return func(o *Option) {
+		o.ala = ala
 	}
 }
 
@@ -239,4 +254,21 @@ type Dater interface {
 // the same order.
 func (v *Vatel) AddMiddleware(pos MiddlewarePos, f ...func(Context) error) {
 	v.mdw[pos] = append(v.mdw[pos], f...)
+}
+
+// JsonMasker is the interface that wraps Mask and Fields methods.
+//
+// Fields returns meta data of the struct which is receiver of coming JSON data.
+// The metadata is used further in the method Mask.
+//
+// Mask modifies JSON using rules specified for each field structure.
+// Returns JSON with masked sensitive values.
+type JsonMasker interface {
+	Fields(structure interface{}, tag string) jsonmask.Fields
+	Mask(src []byte, fields jsonmask.Fields) ([]byte, error)
+}
+
+// Alarmer is the interface that wraps a single method Alarm.
+type Alarmer interface {
+	Alarm(m map[string]interface{})
 }
