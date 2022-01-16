@@ -762,13 +762,13 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.isPathParametrized = isParamer
 
 	ri, hasRespBody := c.(Resulter)
-	if hasRespBody {
+	if hasRespBody && e.jm != nil {
 		e.resultFields = e.jm.Fields(ri.Result(), "mask")
 	}
 	e.hasRespBody = hasRespBody
 
 	ii, isInputer := c.(Inputer)
-	if isInputer {
+	if isInputer && e.jm != nil {
 		e.inputFields = e.jm.Fields(ii.Input(), "mask")
 	}
 
