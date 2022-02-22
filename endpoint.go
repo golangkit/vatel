@@ -88,14 +88,15 @@ type Endpoint struct {
 
 	ManualStatusCode bool
 
-	//RequestContentType  string // если пусто, то присваивается "application/json; encoding=utf-8"
+	//
+	SuccessStatusCode int
 
 	isPathParametrized    bool
 	isURLQueryExpected    bool
 	isRequestBodyExpected bool
 	hasRespBody           bool
 
-	LanguageLabel string // #Cannon
+	LanguageLabel string
 	auth          Authorizer
 	td            TokenDecoder
 	pm            PermissionManager
@@ -110,6 +111,7 @@ type Endpoint struct {
 	resultFields jsonmask.Fields
 
 	ala Alarmer
+	mr  MetricReporter
 }
 
 // NewEndpoint builds Endpoint.
@@ -224,6 +226,61 @@ func writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err erro
 	return
 }
 
+func (e *Endpoint) writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err error) {
+	if err == nil {
+		return
+	}
+
+	statusCode := 500
+	ce, ok := err.(*errors.CatchedError)
+	if ok {
+		statusCode = ce.Last().StatusCode
+		if statusCode == 429 {
+			// in case of too many requests, look if error has attribute Retry-After
+			var hv []byte
+			if ra, ok := ce.Get("Retry-After"); ok {
+				switch ra.(type) {
+				case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
+					hv = []byte(fmt.Sprintf("%d", ra))
+				case string:
+					hv = []byte(ra.(string))
+				case []byte:
+					hv = ra.([]byte)
+				}
+				ctx.SetHeader([]byte("Retry-After"), hv)
+			}
+		}
+	}
+
+	z := *zc
+	ctx.VisitUserValues(func(key []byte, v interface{}) {
+		z = z.Interface(string(key), v)
+	})
+
+	zl := z.RawJSON("err", errors.ToServerJSON(err)).Logger()
+	zl.Error().Msg("request failed")
+
+	ctx.SetContentType([]byte("application/json; charset=utf-8"))
+	ctx.SetStatusCode(statusCode)
+
+	var ff errors.FormattingFlag
+	if verbose {
+		ff = errors.AddStack | errors.AddFields | errors.AddWrappedErrors
+	}
+
+	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
+
+	if xerr != nil {
+		//zl.With().Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
+	}
+
+	if e.mr != nil {
+		e.mr.ReportMetric(e.Method, e.Path, statusCode, time.Since(ctx.RequestCtx().Time()).Seconds(), len(ctx.RequestCtx().Response.Body()))
+	}
+
+	return
+}
+
 func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 	return func(fctx *fasthttp.RequestCtx) {
@@ -252,7 +309,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 		for i := range e.middlewares[BeforeAuthorization] {
 			if err := e.middlewares[BeforeAuthorization][i](ctx); err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 		}
@@ -272,7 +329,7 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 			token, err := e.authorize(fctx)
 			if err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 
@@ -286,20 +343,20 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 
 		if fctx.QueryArgs().GetBool("description") {
 			if err := e.handleDescription(ctx); err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 			}
 			return
 		}
 
 		zc, h, err := e.initController(fctx, lo, zc)
 		if err != nil {
-			writeErrorResponse(ctx, verbose, &zc, err)
+			e.writeErrorResponse(ctx, verbose, &zc, err)
 			return
 		}
 
 		for i := range e.middlewares[AfterAuthorization] {
 			if err := e.middlewares[AfterAuthorization][i](ctx); err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 		}
@@ -315,17 +372,18 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 		}
 
 		if err = h.Handle(ctx); err != nil {
-			writeErrorResponse(ctx, verbose, &zc, err)
+			e.writeErrorResponse(ctx, verbose, &zc, err)
 			return
 		}
 
 		if e.hasRespBody {
 			if err := e.writeResponse(ctx, lo, h.(Resulter).Result(), &zc); err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 		}
 
+		dur := time.Since(fctx.Time())
 		if lo&LogExit == LogExit {
 			msg := "completed"
 			if e.LogOptions&LogEnter != LogEnter {
@@ -340,12 +398,16 @@ func (e *Endpoint) handler(l *zerolog.Logger) func(*fasthttp.RequestCtx) {
 			})
 
 			zl := zc.Logger()
-			zl.Debug().Str("dur", time.Since(fctx.Time()).String()).Msg(msg)
+			zl.Debug().Str("dur", dur.String()).Msg(msg)
+		}
+
+		if e.mr != nil {
+			e.mr.ReportMetric(e.Method, e.Path, 200, dur.Seconds(), len(fctx.Response.Body()))
 		}
 
 		for i := range e.middlewares[OnSuccessResponse] {
 			if err := e.middlewares[OnSuccessResponse][i](ctx); err != nil {
-				writeErrorResponse(ctx, verbose, &zc, err)
+				e.writeErrorResponse(ctx, verbose, &zc, err)
 				return
 			}
 		}
@@ -706,6 +768,7 @@ func (e *Endpoint) compile(v *Vatel) error {
 	e.logRequestID = v.cfg.logRequestID
 	e.jm = v.cfg.jm
 	e.ala = v.cfg.ala
+	e.mr = v.cfg.mr
 
 	if e.LogOptions == LogUnknown {
 		e.LogOptions = v.cfg.defaultLogOption

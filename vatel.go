@@ -66,6 +66,13 @@ type TokenDecoder interface {
 	Decode(encodedToken []byte) (Tokener, error)
 }
 
+// MetricReporter is the interface what wraps a single method ReportMetric.
+//
+// HTTP requests handler uses MetricReporter to submit processing metrics to prometheus.
+type MetricReporter interface {
+	ReportMetric(method, path string, statusCode int, dur float64, size int)
+}
+
 type Logger interface {
 	Log()
 }
@@ -106,6 +113,13 @@ type Option struct {
 	logRequestID       bool
 	jm                 JsonMasker
 	ala                Alarmer
+	mr                 MetricReporter
+}
+
+func WithMetricReporter(mr MetricReporter) func(*Option) {
+	return func(o *Option) {
+		o.mr = mr
+	}
 }
 
 func WithUrlPrefix(s string) func(*Option) {
