@@ -284,5 +284,5 @@ type JsonMasker interface {
 
 // Alarmer is the interface that wraps a single method Alarm.
 type Alarmer interface {
-	Alarm(m map[string]interface{})
+	Alarm(err error)
 }

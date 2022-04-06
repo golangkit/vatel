@@ -175,56 +175,57 @@ type Paramer interface {
 	Param() interface{}
 }
 
-func writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err error) {
-	if err == nil {
-		return
-	}
+// func writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err error) {
+// 	if err == nil {
+// 		return
+// 	}
 
-	statusCode := 500
-	ce, ok := err.(*errors.CatchedError)
-	if ok {
-		statusCode = ce.Last().StatusCode
-		if statusCode == 429 {
-			// in case of too many requests, look if error has attribute Retry-After
-			var hv []byte
-			if ra, ok := ce.Get("Retry-After"); ok {
-				switch ra.(type) {
-				case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
-					hv = []byte(fmt.Sprintf("%d", ra))
-				case string:
-					hv = []byte(ra.(string))
-				case []byte:
-					hv = ra.([]byte)
-				}
-				ctx.SetHeader([]byte("Retry-After"), hv)
-			}
-		}
-	}
+// 	statusCode := 500
+// 	ce, ok := err.(*errors.CatchedError)
+// 	if ok {
+// 		statusCode = ce.Last().StatusCode
+// 		if statusCode == 429 {
+// 			// in case of too many requests, look if error has attribute Retry-After
+// 			var hv []byte
+// 			if ra, ok := ce.Get("Retry-After"); ok {
+// 				switch ra.(type) {
+// 				case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
+// 					hv = []byte(fmt.Sprintf("%d", ra))
+// 				case string:
+// 					hv = []byte(ra.(string))
+// 				case []byte:
+// 					hv = ra.([]byte)
+// 				}
+// 				ctx.SetHeader([]byte("Retry-After"), hv)
+// 			}
+// 		}
+// 	}
 
-	z := *zc
-	ctx.VisitUserValues(func(key []byte, v interface{}) {
-		z = z.Interface(string(key), v)
-	})
+// 	z := *zc
+// 	ctx.VisitUserValues(func(key []byte, v interface{}) {
+// 		z = z.Interface(string(key), v)
+// 	})
 
-	zl := z.RawJSON("err", errors.ToServerJSON(err)).Logger()
-	zl.Error().Msg("request failed")
+// 	jsonErr := errors.ToServerJSON(err)
+// 	zl := z.RawJSON("err", jsonErr).Logger()
+// 	zl.Error().Msg("request failed")
 
-	ctx.SetContentType([]byte("application/json; charset=utf-8"))
-	ctx.SetStatusCode(statusCode)
+// 	ctx.SetContentType([]byte("application/json; charset=utf-8"))
+// 	ctx.SetStatusCode(statusCode)
 
-	var ff errors.FormattingFlag
-	if verbose {
-		ff = errors.AddStack | errors.AddFields | errors.AddWrappedErrors
-	}
+// 	var ff errors.FormattingFlag
+// 	if verbose {
+// 		ff = errors.AddStack | errors.AddFields | errors.AddWrappedErrors
+// 	}
 
-	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
+// 	_, xerr := ctx.BodyWriter().Write(errors.ToJSON(err, ff))
 
-	if xerr != nil {
-		//zl.With().Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
-	}
+// 	if xerr != nil {
+// 		//zl.With().Error().RawJSON("err", errors.ToServerJSON(xerr)).Msg("writing http response failed")
+// 	}
 
-	return
-}
+// 	return
+// }
 
 func (e *Endpoint) writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Context, err error) {
 	if err == nil {
@@ -276,6 +277,10 @@ func (e *Endpoint) writeErrorResponse(ctx Context, verbose bool, zc *zerolog.Con
 
 	if e.mr != nil {
 		e.mr.ReportMetric(e.Method, e.Path, statusCode, time.Since(ctx.RequestCtx().Time()).Seconds(), len(ctx.RequestCtx().Response.Body()))
+	}
+
+	if e.ala != nil && statusCode >= 500 {
+		e.ala.Alarm(err)
 	}
 
 	return
