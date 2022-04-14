@@ -17,7 +17,7 @@ import (
 //
 // Perms returns bitset array with user role's permissions.
 type TokenPayloader interface {
-	User() int
+	User() string
 	Login() string
 	Role() int
 	Perms() []byte
