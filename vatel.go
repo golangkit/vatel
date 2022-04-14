@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/axkit/vatel/jsonmask"
 	"github.com/fasthttp/router"
+	"github.com/golangkit/vatel/jsonmask"
 	"github.com/rs/zerolog"
 	"github.com/valyala/fasthttp"
 )

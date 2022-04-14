@@ -1,4 +1,4 @@
-module github.com/axkit/vatel
+module github.com/golangkit/vatel
 
 go 1.13
 
