@@ -6,6 +6,7 @@ import (
 
 	"github.com/fasthttp/router"
 	"github.com/golangkit/vatel/jsonmask"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/valyala/fasthttp"
 )
@@ -17,7 +18,7 @@ import (
 //
 // Perms returns bitset array with user role's permissions.
 type TokenPayloader interface {
-	User() string
+	User() uuid.UUID
 	Login() string
 	Role() int
 	Perms() []byte
